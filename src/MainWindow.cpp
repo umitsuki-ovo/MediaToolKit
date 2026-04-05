@@ -428,7 +428,7 @@ void MainWindow::setupMenuBar()
     auto* aboutAct  = helpMenu->addAction("バージョン情報(&A)");
     connect(aboutAct, &QAction::triggered, this, [this]{
         QMessageBox::about(this, "MediaToolKit",
-            "<b>MediaToolKit v1.0</b><br><br>"
+            "<b>MediaToolKit v1.0.1</b><br><br>"
             "画像・動画・音声の圧縮・変換ソフト<br><br>"
             "使用ライブラリ: Qt 6.7 / FFmpeg 7.0");
     });
