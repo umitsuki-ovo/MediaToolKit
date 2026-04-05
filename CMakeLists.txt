@@ -11,7 +11,7 @@ set(CMAKE_AUTOUIC ON)
 # Qt6
 # -------------------------------------------------------
 find_package(Qt6 REQUIRED COMPONENTS
-    Core Widgets Multimedia MultimediaWidgets
+    Core Widgets Multimedia MultimediaWidgets Svg
 )
 
 # -------------------------------------------------------
@@ -87,6 +87,7 @@ target_link_libraries(MediaToolKit PRIVATE
     Qt6::Widgets
     Qt6::Multimedia
     Qt6::MultimediaWidgets
+    Qt6::Svg
     ${FFMPEG_LIBS}
 )
 

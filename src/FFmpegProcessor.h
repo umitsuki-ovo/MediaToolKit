@@ -43,14 +43,18 @@ struct CompressOptions {
 // -------------------------------------------------------
 enum class ConvertTarget { VideoToVideo, VideoToAudio, VideoToImage, AudioToAudio, ImageToImage };
 
+// 音声コーデック (m4a コンテナで使用)
+enum class AudioCodec { AAC, ALAC };
+
 struct ConvertOptions {
-    ConvertTarget target  = ConvertTarget::VideoToVideo;
-    QString       format;        // 出力フォーマット拡張子 (例: "mp4", "mp3")
+    ConvertTarget target     = ConvertTarget::VideoToVideo;
+    QString       format;
     VideoCodec    videoCodec = VideoCodec::H264;
+    AudioCodec    audioCodec = AudioCodec::AAC;  // m4a 用
 
     // フレーム抽出
-    double frameTimeSec  = -1.0; // 時間指定 (秒), -1: 先頭
-    int    frameNumber   = -1;   // フレーム番号指定, -1: 未使用
+    double frameTimeSec  = -1.0;
+    int    frameNumber   = -1;
 
     bool   useGPU        = false;
     QString gpuType;
@@ -103,17 +107,18 @@ private:
         int         outWidth      = -1;
         int         outHeight     = -1;
         double      outFps        = -1;
-        int         videoBitrateB = -1;   // bps
+        int         videoBitrateB = -1;
         int         audioBitrateB = -1;
         int         outSampleRate = -1;
         VideoCodec  codec         = VideoCodec::H264;
-        bool        copyVideo     = false; // コーデックコピー
+        bool        copyVideo     = false;
         bool        copyAudio     = false;
-        bool        extractAudio  = false; // 音声のみ出力
-        bool        extractFrame  = false; // フレーム1枚のみ
+        bool        extractAudio  = false;
+        bool        extractFrame  = false;
         double      frameTimeSec  = 0.0;
         bool        useGPU        = false;
         QString     gpuType;
+        bool        forceAlac     = false;  // m4a コンテナに ALAC を格納
     };
 
     QString runTranscode(const QString& inputPath,

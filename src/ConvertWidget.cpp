@@ -4,7 +4,6 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QFileDialog>
-#include <QScrollArea>
 
 ConvertWidget::ConvertWidget(QWidget* parent) : QWidget(parent)
 {
@@ -17,9 +16,8 @@ void ConvertWidget::setupUi()
     root->setContentsMargins(8,8,8,8);
     root->setSpacing(8);
 
-    // ---- 変換設定 ----
-    auto* convGroup  = new QGroupBox("変換設定", this);
-    auto* form       = new QFormLayout(convGroup);
+    auto* convGroup = new QGroupBox("変換設定", this);
+    auto* form      = new QFormLayout(convGroup);
     form->setRowWrapPolicy(QFormLayout::DontWrapRows);
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     form->setHorizontalSpacing(12);
@@ -32,12 +30,8 @@ void ConvertWidget::setupUi()
     // 変換タイプ (動画のみ)
     m_targetCombo = new QComboBox(this);
     m_targetRow   = new QWidget(this);
-    {
-        auto* lay = new QHBoxLayout(m_targetRow);
-        lay->setContentsMargins(0,0,0,0);
-        lay->addWidget(m_targetCombo);
-        lay->addStretch();
-    }
+    { auto* l = new QHBoxLayout(m_targetRow); l->setContentsMargins(0,0,0,0);
+      l->addWidget(m_targetCombo); l->addStretch(); }
     form->addRow("変換タイプ:", m_targetRow);
     m_targetRow->hide();
 
@@ -45,20 +39,26 @@ void ConvertWidget::setupUi()
     m_formatCombo = new QComboBox(this);
     form->addRow("出力フォーマット:", m_formatCombo);
 
-    // コーデック (動画→動画のみ)
-    m_codecCombo = new QComboBox(this);
-    m_codecCombo->addItem("H.264",        (int)VideoCodec::H264);
-    m_codecCombo->addItem("H.265 (HEVC)", (int)VideoCodec::H265);
-    m_codecCombo->addItem("MPEG-4",       (int)VideoCodec::MPEG4);
-    m_codecRow = new QWidget(this);
-    {
-        auto* lay = new QHBoxLayout(m_codecRow);
-        lay->setContentsMargins(0,0,0,0);
-        lay->addWidget(m_codecCombo);
-        lay->addStretch();
-    }
-    form->addRow("コーデック:", m_codecRow);
-    m_codecRow->hide();
+    // 動画コーデック (mp4 のみ表示)
+    m_videoCodecCombo = new QComboBox(this);
+    m_videoCodecCombo->addItem("H.264",        (int)VideoCodec::H264);
+    m_videoCodecCombo->addItem("H.265 (HEVC)", (int)VideoCodec::H265);
+    m_videoCodecCombo->addItem("MPEG-4",       (int)VideoCodec::MPEG4);
+    m_videoCodecRow = new QWidget(this);
+    { auto* l = new QHBoxLayout(m_videoCodecRow); l->setContentsMargins(0,0,0,0);
+      l->addWidget(m_videoCodecCombo); l->addStretch(); }
+    form->addRow("映像コーデック:", m_videoCodecRow);
+    m_videoCodecRow->hide();
+
+    // 音声コーデック (m4a のみ表示: AAC / ALAC)
+    m_audioCodecCombo = new QComboBox(this);
+    m_audioCodecCombo->addItem("AAC (標準)",         (int)AudioCodec::AAC);
+    m_audioCodecCombo->addItem("ALAC (可逆圧縮)",    (int)AudioCodec::ALAC);
+    m_audioCodecRow = new QWidget(this);
+    { auto* l = new QHBoxLayout(m_audioCodecRow); l->setContentsMargins(0,0,0,0);
+      l->addWidget(m_audioCodecCombo); l->addStretch(); }
+    form->addRow("音声コーデック:", m_audioCodecRow);
+    m_audioCodecRow->hide();
 
     // フレーム指定 (動画→画像のみ)
     m_frameModeCombo = new QComboBox(this);
@@ -72,16 +72,10 @@ void ConvertWidget::setupUi()
     m_frameNumSpin->setRange(0, 9999999);
     m_frameNumSpin->setButtonSymbols(QAbstractSpinBox::NoButtons);
     m_frameNumSpin->hide();
-
     m_frameRow = new QWidget(this);
-    {
-        auto* lay = new QHBoxLayout(m_frameRow);
-        lay->setContentsMargins(0,0,0,0);
-        lay->addWidget(m_frameModeCombo);
-        lay->addWidget(m_frameTimeSpin);
-        lay->addWidget(m_frameNumSpin);
-        lay->addStretch();
-    }
+    { auto* l = new QHBoxLayout(m_frameRow); l->setContentsMargins(0,0,0,0);
+      l->addWidget(m_frameModeCombo); l->addWidget(m_frameTimeSpin);
+      l->addWidget(m_frameNumSpin); l->addStretch(); }
     form->addRow("フレーム指定:", m_frameRow);
     m_frameRow->hide();
 
@@ -93,7 +87,7 @@ void ConvertWidget::setupUi()
 
     root->addWidget(convGroup);
 
-    // ---- 出力フォルダ ----
+    // 出力フォルダ
     auto* outGroup  = new QGroupBox("出力先フォルダ", this);
     auto* outLayout = new QHBoxLayout(outGroup);
     m_outputDirEdit = new QLineEdit(this);
@@ -106,11 +100,12 @@ void ConvertWidget::setupUi()
     outLayout->addWidget(m_outputDirEdit);
     outLayout->addWidget(m_browseDirBtn);
     root->addWidget(outGroup);
-
     root->addStretch();
 
     connect(m_targetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ConvertWidget::onConvertTargetChanged);
+    connect(m_formatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ConvertWidget::onFormatChanged);
 }
 
 void ConvertWidget::applyAppSettings(const AppSettings& s)
@@ -122,7 +117,6 @@ void ConvertWidget::applyAppSettings(const AppSettings& s)
 
 void ConvertWidget::setSourceMediaType(MediaType type)
 {
-    // ★ 早期リターンなし: モード切替後の再選択でも必ず更新する
     m_sourceType = type;
 
     switch (type) {
@@ -166,13 +160,14 @@ void ConvertWidget::setSourceMediaType(MediaType type)
 void ConvertWidget::onConvertTargetChanged(int /*index*/)
 {
     m_currentTarget = (ConvertTarget)m_targetCombo->currentData().toInt();
-
-    // コーデック: 動画→動画のみ
-    m_codecRow->setVisible(m_currentTarget == ConvertTarget::VideoToVideo);
-    // フレーム指定: 動画→画像のみ
     m_frameRow->setVisible(m_currentTarget == ConvertTarget::VideoToImage);
-
     updateFormatCombo();
+    updateCodecRow();
+}
+
+void ConvertWidget::onFormatChanged(int /*index*/)
+{
+    updateCodecRow();
 }
 
 void ConvertWidget::updateFormatCombo()
@@ -192,6 +187,23 @@ void ConvertWidget::updateFormatCombo()
         m_formatCombo->addItem(f.toUpper(), f);
 }
 
+void ConvertWidget::updateCodecRow()
+{
+    QString fmt = m_formatCombo->currentData().toString();
+
+    // 動画コーデック: 動画→動画 かつ mp4 のみ表示
+    bool showVideoCodec = (m_currentTarget == ConvertTarget::VideoToVideo)
+                          && (fmt == "mp4");
+    m_videoCodecRow->setVisible(showVideoCodec);
+
+    // 音声コーデック (ALAC): m4a 出力のときのみ表示
+    //   対象: 音声→音声 / 動画→音声
+    bool showAudioCodec = (fmt == "m4a")
+                          && (m_currentTarget == ConvertTarget::AudioToAudio
+                              || m_currentTarget == ConvertTarget::VideoToAudio);
+    m_audioCodecRow->setVisible(showAudioCodec);
+}
+
 ConvertOptions ConvertWidget::buildOptions() const
 {
     ConvertOptions opts;
@@ -202,8 +214,11 @@ ConvertOptions ConvertWidget::buildOptions() const
     QString dir    = m_outputDirEdit->text().trimmed();
     opts.outputDir = dir.isEmpty() ? m_appSettings.defaultOutputDir : dir;
 
-    if (m_currentTarget == ConvertTarget::VideoToVideo)
-        opts.videoCodec = (VideoCodec)m_codecCombo->currentData().toInt();
+    if (m_videoCodecRow->isVisible())
+        opts.videoCodec = (VideoCodec)m_videoCodecCombo->currentData().toInt();
+
+    if (m_audioCodecRow->isVisible())
+        opts.audioCodec = (AudioCodec)m_audioCodecCombo->currentData().toInt();
 
     if (m_currentTarget == ConvertTarget::VideoToImage) {
         if (m_frameModeCombo->currentIndex() == 0) {

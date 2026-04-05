@@ -22,35 +22,35 @@ public:
 
 private slots:
     void onConvertTargetChanged(int index);
+    void onFormatChanged(int index);
 
 private:
     void setupUi();
     void updateFormatCombo();
+    void updateCodecRow();      // フォーマットに応じてコーデック行を切替
 
     MediaType     m_sourceType    = MediaType::Unknown;
     ConvertTarget m_currentTarget = ConvertTarget::VideoToVideo;
 
-    // 入力種別ラベル
-    QLabel*    m_typeLabel     = nullptr;
+    QLabel*    m_typeLabel      = nullptr;
+    QWidget*   m_targetRow      = nullptr;
+    QComboBox* m_targetCombo    = nullptr;
+    QComboBox* m_formatCombo    = nullptr;
 
-    // 変換タイプ (動画のみ表示)
-    QWidget*   m_targetRow     = nullptr;
-    QComboBox* m_targetCombo   = nullptr;
+    // 動画コーデック (mp4 のみ)
+    QWidget*   m_videoCodecRow  = nullptr;
+    QComboBox* m_videoCodecCombo= nullptr;
 
-    // 出力フォーマット
-    QComboBox* m_formatCombo   = nullptr;
+    // 音声コーデック (m4a のみ: AAC / ALAC)
+    QWidget*   m_audioCodecRow  = nullptr;
+    QComboBox* m_audioCodecCombo= nullptr;
 
-    // コーデック (動画→動画のみ表示)
-    QWidget*   m_codecRow      = nullptr;
-    QComboBox* m_codecCombo    = nullptr;
+    // フレーム指定 (動画→画像のみ)
+    QWidget*   m_frameRow       = nullptr;
+    QComboBox* m_frameModeCombo = nullptr;
+    QSpinBox*  m_frameTimeSpin  = nullptr;
+    QSpinBox*  m_frameNumSpin   = nullptr;
 
-    // フレーム指定 (動画→画像のみ表示)
-    QWidget*   m_frameRow      = nullptr;
-    QComboBox* m_frameModeCombo= nullptr;
-    QSpinBox*  m_frameTimeSpin = nullptr;
-    QSpinBox*  m_frameNumSpin  = nullptr;
-
-    // 出力フォルダ
     QLineEdit*   m_outputDirEdit = nullptr;
     QPushButton* m_browseDirBtn  = nullptr;
 

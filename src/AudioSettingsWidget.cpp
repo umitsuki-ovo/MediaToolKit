@@ -1,9 +1,12 @@
 #include "AudioSettingsWidget.h"
 #include "MediaTypes.h"
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QCheckBox>
+#include <QPushButton>
+#include <QButtonGroup>
 
 AudioSettingsWidget::AudioSettingsWidget(QWidget* parent) : QWidget(parent)
 {
@@ -14,15 +17,68 @@ void AudioSettingsWidget::setupUi()
 {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0,0,0,0);
+    root->setSpacing(8);
 
-    // ---- 品質モード ----
+    // ---- 最適化モード (カード型ボタン) ----
     auto* modeGroup  = new QGroupBox("最適化モード", this);
-    auto* modeLayout = new QVBoxLayout(modeGroup);
-    m_qualityFirst = new QRadioButton("品質優先", this);
-    m_sizeFirst    = new QRadioButton("サイズ優先", this);
+    auto* modeLayout = new QHBoxLayout(modeGroup);
+    modeLayout->setSpacing(8);
+
+    m_qualityFirst = new QRadioButton(this);
+    m_sizeFirst    = new QRadioButton(this);
     m_qualityFirst->setChecked(true);
-    modeLayout->addWidget(m_qualityFirst);
-    modeLayout->addWidget(m_sizeFirst);
+    // ラジオボタン自体は非表示にし、カスタム外観のボタンで代替
+    m_qualityFirst->hide();
+    m_sizeFirst->hide();
+
+    // カード型の選択ボタン
+    auto* qualBtn = new QPushButton("品質優先\n高品質・大きいサイズ", modeGroup);
+    auto* sizeBtn = new QPushButton("サイズ優先\n小さいサイズ・低品質", modeGroup);
+    qualBtn->setObjectName("modeCard");
+    sizeBtn->setObjectName("modeCard");
+    qualBtn->setCheckable(true);
+    sizeBtn->setCheckable(true);
+    qualBtn->setChecked(true);
+    qualBtn->setMinimumHeight(56);
+    sizeBtn->setMinimumHeight(56);
+
+    auto* btnGroup = new QButtonGroup(modeGroup);
+    btnGroup->addButton(qualBtn);
+    btnGroup->addButton(sizeBtn);
+    btnGroup->setExclusive(true);
+
+    // カードボタンとラジオボタンを連動
+    connect(qualBtn, &QPushButton::clicked, this, [this]{ m_qualityFirst->setChecked(true); });
+    connect(sizeBtn, &QPushButton::clicked, this, [this]{ m_sizeFirst->setChecked(true); });
+
+    // スタイル
+    auto cardStyle = R"(
+        QPushButton#modeCard {
+            background: #252525;
+            color: #999;
+            border: 2px solid #3a3a3a;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 12px;
+            text-align: center;
+        }
+        QPushButton#modeCard:checked {
+            background: #1a3a5c;
+            color: #fff;
+            border: 2px solid #2d5a8e;
+            font-weight: bold;
+        }
+        QPushButton#modeCard:hover:!checked {
+            background: #2e2e2e;
+            border-color: #555;
+            color: #ccc;
+        }
+    )";
+    qualBtn->setStyleSheet(cardStyle);
+    sizeBtn->setStyleSheet(cardStyle);
+
+    modeLayout->addWidget(qualBtn);
+    modeLayout->addWidget(sizeBtn);
     root->addWidget(modeGroup);
 
     // ---- ビットレート ----
@@ -33,7 +89,7 @@ void AudioSettingsWidget::setupUi()
 
     m_bitrateSlider = new QSlider(Qt::Horizontal, this);
     m_bitrateSlider->setRange(0, AUDIO_BITRATE_COUNT - 1);
-    m_bitrateSlider->setValue(2); // 192 kbps デフォルト
+    m_bitrateSlider->setValue(2);
     m_bitrateSlider->setTickPosition(QSlider::TicksBelow);
     m_bitrateSlider->setEnabled(false);
 
@@ -45,7 +101,6 @@ void AudioSettingsWidget::setupUi()
         m_bitrateLabel->setText(AUDIO_BITRATE_LABELS[v]);
     });
 
-    // スライダー目盛りラベル
     auto* tickRow = new QHBoxLayout;
     for (int i = 0; i < AUDIO_BITRATE_COUNT; i++)
         tickRow->addWidget(new QLabel(AUDIO_BITRATE_LABELS[i]));

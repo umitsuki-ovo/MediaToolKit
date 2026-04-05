@@ -68,28 +68,50 @@ static const QString AUDIO_BITDEPTH_LABELS[AUDIO_BITDEPTH_COUNT] = {
 // 対応フォーマット
 // -------------------------------------------------------
 static const QStringList IMAGE_EXTENSIONS = {
-    "jpg","jpeg","png","gif","webp","heic","heif","tif","tiff","bmp","svg","ico"
+    "jpg","jpeg","png","gif","webp",
+    "heic","heif",   // Apple HEIF
+    "svg",           // SVG ベクター
+    "tif","tiff","bmp","ico"
 };
 static const QStringList VIDEO_EXTENSIONS = {
-    "mp4","mov","avi","webm","mpg","mpeg","mkv","3gp","m4v","flv"
+    "mp4","mov","avi","webm",
+    "mpg","mpeg",    // MPEG-1/2
+    "mkv",
+    "3gp","3g2",     // モバイル動画
+    "m4v","flv","ts","mts","m2ts"
 };
 static const QStringList AUDIO_EXTENSIONS = {
-    "mp3","wav","m4a","aac","flac","wma","ogg","aif","aiff","alac","opus"
+    "mp3","wav","m4a","aac","flac",
+    "wma",           // Windows Media Audio
+    "ogg",
+    "aif","aiff",    // Apple AIFF
+    "alac",          // Apple Lossless
+    "opus","ape","tak","tta"
 };
 
 // 変換先フォーマットリスト
 static const QStringList IMAGE_OUTPUT_FORMATS = {
-    "jpg","png","webp","gif","bmp","tiff","ico"
+    "jpg","png","webp","gif","bmp","tiff","ico",
+    "svg",       // Potrace によるベクタ変換
+    // heic/heif は出力エンコーダが通常の FFmpeg ビルドに含まれないため非対応
 };
 static const QStringList VIDEO_OUTPUT_FORMATS = {
-    "mp4","mov","avi","webm","mkv","m4v","flv"
+    "mp4","mov","avi","webm","mkv","m4v","flv",
+    "mpg",       // MPEG-1/2 出力
+    "3gp",       // モバイル動画
 };
 static const QStringList AUDIO_OUTPUT_FORMATS = {
-    "mp3","wav","aac","flac","ogg","m4a","opus"
+    // m4a は UI 上で音声コーデック (AAC/ALAC) を選べるため1エントリのみ
+    "mp3","wav","aac","flac","ogg","m4a","opus",
+    "wma",       // Windows Media Audio
+    "aif",       // Apple AIFF
+    // alac は m4a コンテナ経由なので独立エントリとしては不要
 };
 // 動画→音声
 static const QStringList VIDEO_TO_AUDIO_FORMATS = {
-    "mp3","wav","aac","flac","ogg"
+    "mp3","wav","aac","flac","ogg","m4a",  // m4a を追加 (AAC/ALAC 選択可)
+    "wma","aif",
+    // alac は m4a + 音声コーデック選択で対応するため除外
 };
 // 動画→画像（フレーム抽出）
 static const QStringList VIDEO_TO_IMAGE_FORMATS = {

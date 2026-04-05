@@ -220,9 +220,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
 MainWindow::~MainWindow()
 {
-    if (m_worker && m_worker->isRunning()) {
-        m_worker->requestStop();
-        m_worker->wait(3000);
+    // m_processTimer を先に止める (スロット呼び出しを防ぐ)
+    if (m_processTimer) {
+        m_processTimer->stop();
+        m_processTimer->disconnect();
+    }
+
+    if (m_worker) {
+        // シグナルを完全に切断してからワーカーを停止
+        m_worker->disconnect();
+        if (m_worker->isRunning()) {
+            m_worker->requestStop();
+            if (!m_worker->wait(5000))
+                m_worker->terminate();
+            m_worker->wait(1000);
+        }
+        // deleteLater をキャンセルするため直接 delete
+        // (すでに deleteLater が呼ばれている場合は QPointer で保護)
+        delete m_worker;
+        m_worker = nullptr;
     }
 }
 
@@ -412,7 +428,7 @@ void MainWindow::setupMenuBar()
     auto* aboutAct  = helpMenu->addAction("バージョン情報(&A)");
     connect(aboutAct, &QAction::triggered, this, [this]{
         QMessageBox::about(this, "MediaToolKit",
-            "<b>MediaToolKit v1.00</b><br><br>"
+            "<b>MediaToolKit v1.0</b><br><br>"
             "画像・動画・音声の圧縮・変換ソフト<br><br>"
             "使用ライブラリ: Qt 6.7 / FFmpeg 7.0");
     });
@@ -601,16 +617,17 @@ void MainWindow::onStartProcess()
     }
 
     // シグナル接続
-    connect(m_worker, &BatchWorker::fileStarted,
-            this, &MainWindow::onFileStarted);
-    connect(m_worker, &BatchWorker::fileProgress,
-            this, &MainWindow::onFileProgress);
-    connect(m_worker, &BatchWorker::fileFinished,
-            this, &MainWindow::onFileFinished);
-    connect(m_worker, &BatchWorker::allFinished,
-            this, &MainWindow::onAllFinished);
-    connect(m_worker, &QThread::finished,
-            m_worker, &QObject::deleteLater);
+    connect(m_worker, &BatchWorker::fileStarted,  this, &MainWindow::onFileStarted);
+    connect(m_worker, &BatchWorker::fileProgress, this, &MainWindow::onFileProgress);
+    connect(m_worker, &BatchWorker::fileFinished, this, &MainWindow::onFileFinished);
+    connect(m_worker, &BatchWorker::allFinished,  this, &MainWindow::onAllFinished);
+    // finished シグナルでワーカーを nullptr にリセット (deleteLater は使わない)
+    connect(m_worker, &QThread::finished, this, [this]{
+        if (m_worker) {
+            m_worker->deleteLater();
+            m_worker = nullptr;
+        }
+    });
 
     setProcessing(true);
     // 処理時間タイマー開始

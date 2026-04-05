@@ -2,10 +2,14 @@
 
 #include <QFileInfo>
 #include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QBuffer>
+#include <QProcess>
+#include <QSvgRenderer>
+#include <QPainter>
 #include <QDebug>
 #include <algorithm>
 #include <cstring>
@@ -36,7 +40,9 @@ static QByteArray qtFmt(const QString& ext)
     static const struct { const char* e; const char* f; } T[] = {
         {"jpg","JPEG"},{"jpeg","JPEG"},{"png","PNG"},{"bmp","BMP"},
         {"gif","GIF"}, {"webp","WEBP"},{"tif","TIFF"},{"tiff","TIFF"},
-        {"ico","ICO"}, {nullptr,nullptr}
+        {"ico","ICO"}, {"svg","SVG"},
+        {"heic","HEIC"},{"heif","HEIF"},
+        {nullptr,nullptr}
     };
     for (int i = 0; T[i].e; i++)
         if (ext == T[i].e) return QByteArray(T[i].f);
@@ -48,9 +54,13 @@ static const AVCodec* pickAudioEncoder(const QString& ext)
 {
     static const struct { const char* e; const char* n; } T[] = {
         {"mp3","libmp3lame"},{"ogg","libvorbis"},{"opus","libopus"},
-        {"flac","flac"},    {"wav","pcm_s16le"},{"aiff","pcm_s16be"},
-        {"aif","pcm_s16be"},{"m4a","aac"},      {"aac","aac"},
-        {"wma","wmav2"},    {"alac","alac"},     {"webm","libopus"},
+        {"flac","flac"},    {"wav","pcm_s16le"},
+        {"aiff","pcm_s16be"},{"aif","pcm_s16be"},  // Apple AIFF
+        {"m4a","aac"},      {"aac","aac"},
+        {"wma","wmav2"},                             // Windows Media Audio
+        {"alac","alac"},                             // Apple Lossless
+        {"webm","libopus"},
+        {"ape","ape"},      {"tta","tta"},
         {nullptr,nullptr}
     };
     for (int i = 0; T[i].e; i++) {
@@ -234,17 +244,87 @@ QString FFmpegProcessor::convert(const QString& in, const ConvertOptions& opts, 
 }
 
 // ================================================================
-// 画像読み込み
+// 画像読み込み (HEIC/HEIF/SVG/TIFF/WebP 対応)
 // ================================================================
 static QImage loadImage(const QString& path)
 {
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    reader.setDecideFormatFromContent(true);
-    if (reader.canRead()) {
-        QImage img = reader.read();
-        if (!img.isNull()) return img;
+    // QImageReader を優先 (プラグインが有効なら HEIC/WebP/TIFF/GIF も読める)
+    {
+        QImageReader reader(path);
+        reader.setAutoTransform(true);
+        reader.setDecideFormatFromContent(true);
+        if (reader.canRead()) {
+            QImage img = reader.read();
+            if (!img.isNull()) return img;
+        }
     }
+
+    // SVG: QSvgRenderer でラスタライズ (Qt6::Svg モジュール)
+    QString ext = QFileInfo(path).suffix().toLower();
+    if (ext == "svg") {
+        QSvgRenderer renderer(path);
+        if (!renderer.isValid()) return {};
+        // SVG のデフォルトサイズでラスタライズ (最小 64px, 最大 4096px)
+        QSize sz = renderer.defaultSize();
+        if (!sz.isValid() || sz.isEmpty()) sz = QSize(512, 512);
+        sz = sz.boundedTo(QSize(4096, 4096)).expandedTo(QSize(64, 64));
+        QImage img(sz, QImage::Format_ARGB32);
+        img.fill(Qt::transparent);
+        QPainter painter(&img);
+        renderer.render(&painter);
+        painter.end();
+        return img;
+    }
+
+    // HEIC/HEIF: FFmpeg でデコードして RGB に変換
+    if (ext == "heic" || ext == "heif") {
+        AVFormatContext* ifmt = nullptr;
+        if (avformat_open_input(&ifmt, path.toUtf8(), nullptr, nullptr) < 0) return {};
+        avformat_find_stream_info(ifmt, nullptr);
+        int vi = -1;
+        for (unsigned i = 0; i < ifmt->nb_streams; i++)
+            if (ifmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+                { vi = (int)i; break; }
+        if (vi < 0) { avformat_close_input(&ifmt); return {}; }
+
+        const AVCodec* dec = avcodec_find_decoder(ifmt->streams[vi]->codecpar->codec_id);
+        QImage result;
+        if (dec) {
+            AVCodecContext* decCtx = avcodec_alloc_context3(dec);
+            avcodec_parameters_to_context(decCtx, ifmt->streams[vi]->codecpar);
+            if (avcodec_open2(decCtx, dec, nullptr) >= 0) {
+                AVPacket* pkt   = av_packet_alloc();
+                AVFrame*  frame = av_frame_alloc();
+                while (av_read_frame(ifmt, pkt) >= 0 && result.isNull()) {
+                    if (pkt->stream_index == vi) {
+                        avcodec_send_packet(decCtx, pkt);
+                        if (avcodec_receive_frame(decCtx, frame) == 0) {
+                            SwsContext* sws = sws_getContext(
+                                frame->width, frame->height, (AVPixelFormat)frame->format,
+                                frame->width, frame->height, AV_PIX_FMT_RGB24,
+                                SWS_BILINEAR, nullptr, nullptr, nullptr);
+                            if (sws) {
+                                result = QImage(frame->width, frame->height, QImage::Format_RGB888);
+                                uint8_t* dst[1] = { result.bits() };
+                                int ls[1]       = { (int)result.bytesPerLine() };
+                                sws_scale(sws, frame->data, frame->linesize, 0, frame->height, dst, ls);
+                                sws_freeContext(sws);
+                            }
+                            av_frame_unref(frame);
+                        }
+                    }
+                    av_packet_unref(pkt);
+                }
+                av_packet_free(&pkt);
+                av_frame_free(&frame);
+            }
+            avcodec_free_context(&decCtx);
+        }
+        avformat_close_input(&ifmt);
+        return result;
+    }
+
+    // 通常フォールバック
     return QImage(path);
 }
 
@@ -256,6 +336,34 @@ static QString writeImage(const QImage& imgIn, const QString& outPath,
 {
     QImage img = imgIn;
     QByteArray fmt = fmtHint;
+
+    // SVG への変換: Potrace を使ってラスタ → ベクタ変換
+    if (fmt == "SVG") {
+        // グレースケール BMP として一時保存 (Potrace は BMP/PNM を入力として受け付ける)
+        QString tmpBmp = outPath + ".tmp.bmp";
+        QImage gray = imgIn.convertToFormat(QImage::Format_Grayscale8);
+        if (!gray.save(tmpBmp, "BMP"))
+            return "SVG変換用の一時ファイル作成に失敗しました";
+
+        // potrace.exe を呼び出す
+        // -s: SVG 出力  -o: 出力ファイル
+        QProcess proc;
+        proc.setProgram("potrace");
+        proc.setArguments({tmpBmp, "-s", "-o", outPath});
+        proc.start();
+        bool finished = proc.waitForFinished(60000);  // 最大60秒
+        QFile::remove(tmpBmp);
+
+        if (!finished || proc.exitCode() != 0 || !QFileInfo::exists(outPath)) {
+            QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+            return QString(
+                "SVG変換に失敗しました。\n"
+                "potrace.exe を MediaToolKit.exe と同じフォルダか PATH に配置してください。\n"
+                "ダウンロード: https://potrace.sourceforge.net/\n"
+                "詳細: %1").arg(err.isEmpty() ? "potrace が起動できませんでした" : err);
+        }
+        return {};
+    }
 
     // フォーマット固有の前処理
     if (fmt == "JPEG" && img.hasAlphaChannel())
@@ -401,6 +509,17 @@ QString FFmpegProcessor::compressImage(const QString& in, const CompressOptions&
 {
     if (cb && !cb(0.1f)) return "キャンセルされました";
 
+    QString ext = QFileInfo(in).suffix().toLower();
+
+    // SVG はラスタライズ不可のためそのままコピー
+    if (ext == "svg") {
+        QString out = buildOutputPath(in, opts.outputDir, "_compressed");
+        QFile::remove(out);
+        if (!QFile::copy(in, out)) return "SVGのコピーに失敗: " + out;
+        if (cb) (void)cb(1.0f);
+        return {};
+    }
+
     QImage img = loadImage(in);
     if (img.isNull()) return "ファイルの読み込みに失敗: " + in;
 
@@ -414,7 +533,6 @@ QString FFmpegProcessor::compressImage(const QString& in, const CompressOptions&
     if (cb && !cb(0.4f)) return "キャンセルされました";
 
     QString    out = buildOutputPath(in, opts.outputDir, "_compressed");
-    QString    ext = QFileInfo(in).suffix().toLower();
     QByteArray fmt = qtFmt(ext);
     int        q   = opts.imageLossless ? 0 : opts.imageQuality;
 
@@ -560,11 +678,17 @@ QString FFmpegProcessor::compressVideoAudio(const QString& in, const CompressOpt
 // ================================================================
 QString FFmpegProcessor::convertVideoAudio(const QString& in, const ConvertOptions& opts, ProgressCb cb)
 {
+    // alac 拡張子 または m4a+ALAC コーデック → m4a コンテナにマッピング
+    QString outFmt = opts.format;
+    if (outFmt == "alac") outFmt = "m4a";
+
     TranscodeParams p;
-    p.outputPath  = buildOutputPath(in, opts.outputDir, "", opts.format);
+    p.outputPath  = buildOutputPath(in, opts.outputDir, "", outFmt);
     p.codec       = opts.videoCodec;
     p.useGPU      = opts.useGPU;
     p.gpuType     = opts.gpuType;
+    // m4a + ALAC コーデック指定の場合は音声エンコーダを ALAC に
+    p.forceAlac   = (outFmt == "m4a" && opts.audioCodec == AudioCodec::ALAC);
     if (opts.target == ConvertTarget::VideoToAudio) p.extractAudio = true;
     return runTranscode(in, p, cb);
 }
@@ -602,16 +726,42 @@ static bool buildVideoEncoder(VideoEncSetup& setup,
                                const QString& outExt)
 {
     // ---- エンコーダ名候補リストを作る ----
-    // 優先順: GPU指定 → CPU版コーデック → libx264 最終手段
     QStringList candidates;
-    if (useGpu && !gpuType.isEmpty())
-        candidates << gpuEncName(codec, gpuType);
-    candidates << (outExt=="webm" ? "libvpx-vp9"
-                 : outExt=="avi"  ? "libx264"
-                 : codec==VideoCodec::H265  ? "libx265"
-                 : codec==VideoCodec::MPEG4 ? "mpeg4"
-                                            : "libx264");
-    if (!candidates.contains("libx264")) candidates << "libx264";
+    bool isMpg = (outExt == "mpg" || outExt == "mpeg");
+
+    if (isMpg) {
+        // MPG は mpeg2video/mpeg1video のみ対応。libx264 は使えない
+        candidates << "mpeg2video" << "mpeg1video";
+        // GPU は使用しない (MPG コンテナはハードウェアエンコーダ非対応)
+    } else {
+        if (useGpu && !gpuType.isEmpty())
+            candidates << gpuEncName(codec, gpuType);
+
+        if      (outExt == "webm") candidates << "libvpx-vp9";
+        else if (outExt == "avi")  candidates << "libx264";
+        else if (outExt == "3gp")  candidates << "libx264" << "mpeg4";
+        else if (codec == VideoCodec::H265)  candidates << "libx265";
+        else if (codec == VideoCodec::MPEG4) candidates << "mpeg4";
+        else                                 candidates << "libx264";
+
+        if (!candidates.contains("libx264")) candidates << "libx264";
+    }
+
+    // MPEG 規格の標準フレームレート (これ以外は最近傍に丸める)
+    static const AVRational kMpegFps[] = {
+        {24000,1001},{24,1},{25,1},{30000,1001},{30,1},
+        {50,1},{60000,1001},{60,1}
+    };
+    if (isMpg) {
+        // 最も近い標準FPSに丸める
+        double inFpsDbl = outFps.den ? (double)outFps.num/outFps.den : 25.0;
+        double best = 1e9; int bestIdx = 2; // デフォルト 25fps
+        for (int i = 0; i < 8; i++) {
+            double d = std::abs(inFpsDbl - (double)kMpegFps[i].num/kMpegFps[i].den);
+            if (d < best) { best = d; bestIdx = i; }
+        }
+        outFps = kMpegFps[bestIdx];
+    }
 
     for (const QString& encName : candidates) {
         const AVCodec* enc = avcodec_find_encoder_by_name(encName.toUtf8());
@@ -662,9 +812,20 @@ static bool buildVideoEncoder(VideoEncSetup& setup,
         ectx->width       = outW;
         ectx->height      = outH;
         ectx->framerate   = outFps;
-        ectx->time_base   = av_inv_q(outFps);
-        ectx->pix_fmt     = encPixFmt;
+        // MPG: codec の time_base は fps の逆数、ストリームは 90kHz クロック
+        // 他: fps の逆数
+        {
+            AVRational tb = av_inv_q(outFps);
+            if (!tb.num || !tb.den || tb.den == 0) tb = {1, 25};
+            ectx->time_base = tb;
+        }
+        // MPG は必ず yuv420p (規格要件)
+        if (isMpg)
+            encPixFmt = AV_PIX_FMT_YUV420P;
+        ectx->pix_fmt = encPixFmt;
+        // MPG のデフォルトビットレート
         if (bitrateB > 0) ectx->bit_rate = bitrateB;
+        else if (isMpg)   ectx->bit_rate = 4000000;
 
         // GPU フレームコンテキストをエンコーダに紐付け
         if (hwFrm) ectx->hw_frames_ctx = av_buffer_ref(hwFrm);
@@ -696,12 +857,20 @@ static bool buildVideoEncoder(VideoEncSetup& setup,
 
         // ---- 出力ストリーム ----
         AVStream* outS = avformat_new_stream(ofmt, nullptr);
-        outS->time_base = ectx->time_base;
+        // MPG システムストリームは 90kHz クロック (MPEG 規格)
+        // 他のコンテナはエンコーダの time_base をそのまま使う
+        if (isMpg)
+            outS->time_base = {1, 90000};
+        else
+            outS->time_base = ectx->time_base;
         avcodec_parameters_from_context(outS->codecpar, ectx);
 
         // ---- スケーラ: CPU側のフォーマット変換用 ----
         // GPU エンコーダ時は NV12 まで変換し、その後 GPU に転送
-        AVPixelFormat targetSW = isGpuEnc ? AV_PIX_FMT_NV12 : encPixFmt;
+        // MPG は常に yuv420p
+        AVPixelFormat targetSW = isGpuEnc ? AV_PIX_FMT_NV12
+                               : isMpg    ? AV_PIX_FMT_YUV420P
+                               :            encPixFmt;
         SwsContext* sws = nullptr;
         if (decCtx->width != outW || decCtx->height != outH || decCtx->pix_fmt != targetSW)
         {
@@ -769,17 +938,27 @@ QString FFmpegProcessor::runTranscode(const QString& inputPath,
             vidDecCtx->thread_count = 0;  // マルチスレッドデコード
             if (avcodec_open2(vidDecCtx, dec, nullptr) < 0) break;
 
+            if (inVS->codecpar->width <= 0 || inVS->codecpar->height <= 0) break;
+
             int outW = (p.outWidth  > 0) ? p.outWidth  : inVS->codecpar->width;
             int outH = (p.outHeight > 0) ? p.outHeight : inVS->codecpar->height;
-            if (p.outWidth  > 0 && p.outHeight <= 0)
+            if (p.outWidth  > 0 && p.outHeight <= 0 && inVS->codecpar->width > 0)
                 outH = (int)((double)inVS->codecpar->height * p.outWidth / inVS->codecpar->width) & ~1;
-            if (p.outHeight > 0 && p.outWidth <= 0)
+            if (p.outHeight > 0 && p.outWidth <= 0 && inVS->codecpar->height > 0)
                 outW = (int)((double)inVS->codecpar->width * p.outHeight / inVS->codecpar->height) & ~1;
             outW = std::max(outW & ~1, 2);
             outH = std::max(outH & ~1, 2);
 
-            AVRational outFps = (p.outFps > 0) ? av_d2q(p.outFps, 1000) : inVS->avg_frame_rate;
-            if (!outFps.num || !outFps.den) outFps = {30,1};
+            // FPS: avg_frame_rate → r_frame_rate → 30fps フォールバック
+            AVRational outFps;
+            if (p.outFps > 0) {
+                outFps = av_d2q(p.outFps, 1000);
+            } else {
+                outFps = inVS->avg_frame_rate;
+                if (!outFps.num || !outFps.den || outFps.den == 0)
+                    outFps = inVS->r_frame_rate;
+            }
+            if (!outFps.num || !outFps.den || outFps.den == 0) outFps = {30, 1};
 
             if (!buildVideoEncoder(vidSetup, ofmt, vidDecCtx,
                                     outW, outH, outFps, p.videoBitrateB,
@@ -822,10 +1001,26 @@ QString FFmpegProcessor::runTranscode(const QString& inputPath,
                 av_channel_layout_default(&audDecCtx->ch_layout, ch);
             }
 
-            const AVCodec* enc = pickAudioEncoder(outExt);
+            // MPG は音声コーデックが mp2 固定 (MPEG 規格要件)
+            // forceAlac フラグのとき ALAC を優先
+            const AVCodec* enc = nullptr;
+            bool isMpgAudio = (outExt == "mpg" || outExt == "mpeg");
+            if (isMpgAudio) {
+                enc = avcodec_find_encoder_by_name("mp2");
+                if (!enc) enc = avcodec_find_encoder_by_name("mp2fixed");
+            } else if (p.forceAlac) {
+                enc = avcodec_find_encoder_by_name("alac");
+            }
+            if (!enc) enc = pickAudioEncoder(outExt);
+            if (!enc) break;
             AVSampleFormat outFmt = enc->sample_fmts ? enc->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
             int outSR = (p.outSampleRate > 0) ? p.outSampleRate : inAS->codecpar->sample_rate;
-            if (outExt == "opus" || (!vidSetup.encCtx && outExt == "webm")) outSR = 48000;
+            // MPG/mp2 は 44100 か 48000 のみ対応
+            if (isMpgAudio) {
+                outSR = (outSR <= 44100) ? 44100 : 48000;
+            } else if (outExt == "opus" || (!vidSetup.encCtx && outExt == "webm")) {
+                outSR = 48000;
+            }
             if (enc->supported_samplerates) {
                 int best = enc->supported_samplerates[0], diff = abs(best - outSR);
                 for (int i = 1; enc->supported_samplerates[i]; i++) {
@@ -835,6 +1030,8 @@ QString FFmpegProcessor::runTranscode(const QString& inputPath,
                 outSR = best;
             }
             int nCh = audDecCtx->ch_layout.nb_channels;
+            // MPG/MP2: 最大ステレオ、サンプルレートは 44100 か 48000
+            if (isMpgAudio && nCh > 2) nCh = 2;
             if ((outExt == "opus" || outExt == "mp3") && nCh > 2) nCh = 2;
             AVChannelLayout outLayout{};
             av_channel_layout_default(&outLayout, nCh);
@@ -855,7 +1052,11 @@ QString FFmpegProcessor::runTranscode(const QString& inputPath,
             }
 
             outAS = avformat_new_stream(ofmt, nullptr);
-            outAS->time_base = audEncCtx->time_base;
+            // MPG システムストリームは 90kHz クロック
+            if (outExt == "mpg" || outExt == "mpeg")
+                outAS->time_base = {1, 90000};
+            else
+                outAS->time_base = audEncCtx->time_base;
             avcodec_parameters_from_context(outAS->codecpar, audEncCtx);
 
             AVChannelLayout decLayout = audDecCtx->ch_layout;
@@ -882,7 +1083,29 @@ QString FFmpegProcessor::runTranscode(const QString& inputPath,
             return "出力ファイルを開けません: " + avErr(ret);
         }
     }
-    avformat_write_header(ofmt, nullptr);
+    // MPG/MPEG は avformat_write_header 内でゼロ除算が起きやすい
+    // muxrate=0 で可変ビットレートを許可し、preload を無効化
+    {
+        AVDictionary* muxOpts = nullptr;
+        if (outExt == "mpg" || outExt == "mpeg") {
+            av_dict_set(&muxOpts, "muxrate", "0", 0);
+            av_dict_set(&muxOpts, "preload",  "0", 0);
+        }
+        ret = avformat_write_header(ofmt, &muxOpts);
+        av_dict_free(&muxOpts);
+        if (ret < 0) {
+            freeVideoEncSetup(vidSetup);
+            if (vidDecCtx) avcodec_free_context(&vidDecCtx);
+            if (audDecCtx) avcodec_free_context(&audDecCtx);
+            if (audEncCtx) avcodec_free_context(&audEncCtx);
+            if (swrCtx)    swr_free(&swrCtx);
+            if (aFifo)     av_audio_fifo_free(aFifo);
+            if (!(ofmt->oformat->flags & AVFMT_NOFILE)) avio_closep(&ofmt->pb);
+            avformat_free_context(ofmt);
+            avformat_close_input(&ifmt);
+            return "出力ヘッダの書き込みに失敗: " + avErr(ret);
+        }
+    }
 
     // ---- encodeFrame ヘルパー ----
     auto encodeFrame = [&](AVCodecContext* ec, AVFrame* frm, AVStream* os) {
